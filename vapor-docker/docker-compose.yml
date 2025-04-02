@@ -1,0 +1,88 @@
+volumes:
+  db_data:
+
+x-shared_environment: &shared_environment
+  LOG_LEVEL: ${LOG_LEVEL:-debug}
+  DATABASE_HOST: db
+  DATABASE_PORT: 5432
+  DATABASE_USER: postgres
+  DATABASE_PASSWORD: postgres
+  DATABASE_NAME: postgres
+  ROOT_CERT_PATH: ca.pem
+  
+services:
+  db:
+    build:
+      context: .
+      dockerfile: docker/db/Dockerfile
+    volumes:
+      - db_data:/var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    restart: always
+    environment:
+      PGDATA: /var/lib/postgresql/data/pgdata
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          sh -c "pg_isready -d '
+            sslmode=verify-full
+            sslrootcert=/var/lib/postgresql/ca.crt
+            sslcert=/var/lib/postgresql/server.crt
+            sslkey=/var/lib/postgresql/server.key
+            user=$${POSTGRES_USER}
+            password=$${POSTGRES_PASSWORD}
+            dbname=$${POSTGRES_DB}
+          '"
+#      test: ["CMD-SHELL", "nc -z localhost 5432"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+  server:
+    image: vapor-docker:latest
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    environment:
+      <<: *shared_environment
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - '8080:8080'
+    # user: '0' # uncomment to run as root for testing purposes even though Dockerfile defines 'vapor' user.
+    command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
+  
+  migrations:
+    image: vapor-docker:latest
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    environment:
+      <<: *shared_environment
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["migrate", "--yes"]
+    deploy:
+      replicas: 0
+  
+  revert-migrations:
+    image: vapor-docker:latest
+    build:
+      context: .
+      dockerfile: docker/server/Dockerfile
+    environment:
+      <<: *shared_environment
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["migrate", "--revert", "--yes"]
+    deploy:
+      replicas: 0
+  
